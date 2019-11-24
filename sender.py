@@ -1,28 +1,37 @@
 import time
+import datetime
 from ipc_manager import IPCManager
 from frame import Frame
 from utils import split_string
 from utils import get_time_h_m_s
 from utils import flip_biased_coin
+from utils import get_delta_ms
 from transm_global_params import TransmissionProtocol
 import transm_global_params
 
 
 class Sender:
-    def __init__(self, ipc_manager, transmission_protocol):
+    def __init__(self, ipc_manager, transmission_protocol, verbose=False):
         self.ipc_manager_ = ipc_manager
         self.transmission_protocol_ = transmission_protocol
         if transmission_protocol == TransmissionProtocol.ALGORITHM_TYPE_GBN:
-            print("sender: GO BACK N")
+            if verbose:
+                print("sender: GO BACK N")
         elif transmission_protocol == TransmissionProtocol.ALGORITHM_TYPE_SR:
-            print("sender: SELECTIVE REPEAT")
+            if verbose:
+                print("sender: SELECTIVE REPEAT")
+        self.VERBOSE = verbose
+
+        self.total_sent_ = 0
+        self.total_received_ack_ = 0
 
     def wait_for_connection(self):
         time_since_last_try = time.time()
         while True:
 
             if time.time() - time_since_last_try > transm_global_params.CONNECTION_ESTABLISHMENT_INTERVAL:
-                print("sender: Trying to connect", get_time_h_m_s())
+                if self.VERBOSE:
+                    print("sender: Trying to connect", get_time_h_m_s())
                 frame = Frame(None, transm_global_params.ESTABLISH_CONNECTION_CODE, False, False)
                 self.ipc_manager_.send_to_receiver(frame)
                 time_since_last_try = time.time()
@@ -31,7 +40,8 @@ class Sender:
             if ack is None:
                 continue
             if ack.seq_num_ == transm_global_params.ESTABLISH_CONNECTION_CODE:
-                print("sender: Connection established", get_time_h_m_s())
+                if self.VERBOSE:
+                    print("sender: Connection established", get_time_h_m_s())
                 break
 
     def send(self, data_list):
@@ -47,12 +57,13 @@ class Sender:
         cur_data_block_idx = 0
         is_waiting_last_ack = False
 
-        last_frame_resend_counter = 0
+        # last_frame_timeout_start = 0
 
         sent_frames = []
         timers = []
 
-        print("sender: Start transmission", get_time_h_m_s())
+        if self.VERBOSE:
+            print("sender: Start transmission", get_time_h_m_s())
 
         while True:
             if seq_num_last < seq_num_first + transm_global_params.WINDOW_SIZE and not is_waiting_last_ack:
@@ -63,13 +74,17 @@ class Sender:
                     is_corrupted=flip_biased_coin(transm_global_params.ERROR_PROBABILITY)
                 )
 
-                print("sender: Send frame", seq_num_last, "is corrupted:", frame.is_corrupted_, get_time_h_m_s())
+                if self.VERBOSE:
+                    print("sender: Send frame", seq_num_last, "is corrupted:", frame.is_corrupted_, get_time_h_m_s())
                 self.ipc_manager_.send_to_receiver(frame)
+                self.total_sent_ += 1
                 cur_data_block_idx += 1
 
                 if cur_data_block_idx == len(data_list):
-                    print("sender: Wait last ack, no new frame", get_time_h_m_s())
+                    if self.VERBOSE:
+                        print("sender: Wait last ack, no new frame", get_time_h_m_s())
                     is_waiting_last_ack = True
+                    # last_frame_timeout_start = time.time()
 
                 sent_frames.append(frame)
                 timers.append(time.time())
@@ -77,34 +92,54 @@ class Sender:
 
             ack = self.ipc_manager_.get_from_receiver()
             if ack is not None and not ack.is_corrupted_:
+                self.total_received_ack_ += 1
                 if seq_num_first < ack.seq_num_ <= seq_num_last:
-                    print("sender: Received ack", ack.seq_num_, get_time_h_m_s())
-                    seq_num_first += 1
-                    del sent_frames[0]
-                    del timers[0]
+                    if self.VERBOSE:
+                        print("sender: Received ack", ack.seq_num_, get_time_h_m_s())
+
+                    idx_del = 0
+                    for i in range(len(sent_frames)):
+                        if sent_frames[i] is not None and ack.seq_num_ - 1 == sent_frames[i].seq_num_:
+                            idx_del = i
+                            break
+
+                    sent_frames[idx_del] = None
+                    timers[idx_del] = None
+
+                    if idx_del == 0:
+                        while len(sent_frames) != 0 and sent_frames[0] is None:
+                            del sent_frames[0]
+                            del timers[0]
+                            seq_num_first += 1
 
                 if is_waiting_last_ack and len(sent_frames) == 0:
-                    print("sender: Received last ack, terminate transmission", get_time_h_m_s())
+                    if self.VERBOSE:
+                        print("sender: Received last ack, terminate transmission", get_time_h_m_s())
                     break
 
             if ack is not None and ack.is_corrupted_:
-                print("sender: Corrupted ack, ignoring", ack.seq_num_, get_time_h_m_s())
+                if self.VERBOSE:
+                    print("sender: Corrupted ack, ignoring", ack.seq_num_, get_time_h_m_s())
 
-            cur_time = time.time()
             for i in range(len(timers)):
+                if timers[i] is None:
+                    continue
+                cur_time = time.time()
                 if cur_time - timers[i] > transm_global_params.TIMEOUT_SEL_REPEAT_SENDER:
                     sent_frames[i].is_corrupted_ = flip_biased_coin(transm_global_params.ERROR_PROBABILITY)
                     self.ipc_manager_.send_to_receiver(sent_frames[i])
-
-                    if is_waiting_last_ack and len(sent_frames) == 1:
-                        last_frame_resend_counter += 1
-                    if last_frame_resend_counter == transm_global_params.MAX_LAST_PACKET_SENDING:
-                        print("sender: Last frame re-sending limit is reached, terminating", get_time_h_m_s())
-                        break
+                    self.total_sent_ += 1
 
                     timers[i] = time.time()
-                    print("sender: Timeout, retransmit", sent_frames[i].seq_num_, "is corrupted:",
-                          sent_frames[i].is_corrupted_, get_time_h_m_s())
+                    if self.VERBOSE:
+                        print("sender: Timeout, retransmit", sent_frames[i].seq_num_, "is corrupted:",
+                              sent_frames[i].is_corrupted_, get_time_h_m_s())
+
+            # if is_waiting_last_ack:
+            #     if time.time() - last_frame_timeout_start > transm_global_params.TIMEOUT_LAST_PACKET_SENDER:
+            #         if self.VERBOSE:
+            #             print("sender: Last frame re-sending timeout, terminating", get_time_h_m_s())
+            #         break
 
     def send_go_back_n(self, data_list):
         seq_num_first = 0
@@ -115,11 +150,12 @@ class Sender:
         cur_data_block_idx = 0
         is_waiting_last_ack = False
 
-        last_frame_resend_counter = 0
+        # last_frame_timeout_start = 0
 
         sent_frames = []
 
-        print("sender: Start transmission", get_time_h_m_s())
+        if self.VERBOSE:
+            print("sender: Start transmission", get_time_h_m_s())
 
         while True:
             if seq_num_last < seq_num_first + transm_global_params.WINDOW_SIZE and not is_waiting_last_ack:
@@ -130,13 +166,17 @@ class Sender:
                     is_corrupted=flip_biased_coin(transm_global_params.ERROR_PROBABILITY)
                 )
 
-                print("sender: Send frame", seq_num_last, "is corrupted:", frame.is_corrupted_, get_time_h_m_s())
+                if self.VERBOSE:
+                    print("sender: Send frame", seq_num_last, "is corrupted:", frame.is_corrupted_, get_time_h_m_s())
                 self.ipc_manager_.send_to_receiver(frame)
+                self.total_sent_ += 1
                 cur_data_block_idx += 1
 
                 if cur_data_block_idx == len(data_list):
-                    print("sender: Wait last ack, no new frame", get_time_h_m_s())
+                    if self.VERBOSE:
+                        print("sender: Wait last ack, no new frame", get_time_h_m_s())
                     is_waiting_last_ack = True
+                    # last_frame_timeout_start = time.time()
 
                 sent_frames.append(frame)
                 seq_num_last += 1
@@ -144,36 +184,41 @@ class Sender:
             ack = self.ipc_manager_.get_from_receiver()
 
             if ack is not None and not ack.is_corrupted_:
-
+                self.total_received_ack_ += 1
                 if seq_num_first < ack.seq_num_ <= seq_num_last:
-                    print("sender: Received ack", ack.seq_num_, get_time_h_m_s())
+                    if self.VERBOSE:
+                        print("sender: Received ack", ack.seq_num_, get_time_h_m_s())
                     while seq_num_first < ack.seq_num_:
                         seq_num_first += 1
                         time_since_last_ack = time.time()
                         del sent_frames[0]
                     if is_waiting_last_ack and len(sent_frames) == 0:
-                        print("sender: Received last ack, terminate transmission", get_time_h_m_s())
+                        if self.VERBOSE:
+                            print("sender: Received last ack, terminate transmission", get_time_h_m_s())
                         break
             else:
                 if ack is not None and ack.is_corrupted_:
-                    print("sender: Corrupted ack, ignoring", ack.seq_num_, get_time_h_m_s())
+                    if self.VERBOSE:
+                        print("sender: Corrupted ack, ignoring", ack.seq_num_, get_time_h_m_s())
                 if time.time() - time_since_last_ack > transm_global_params.TIMEOUT_GO_BACK_N_SENDER:
-                    print("sender: Timeout, resend entire window", get_time_h_m_s())
+                    if self.VERBOSE:
+                        print("sender: Timeout, resend entire window", get_time_h_m_s())
                     for frame in sent_frames:
                         frame.is_corrupted_ = flip_biased_coin(transm_global_params.ERROR_PROBABILITY)
                         self.ipc_manager_.send_to_receiver(frame)
-
-                    if is_waiting_last_ack and len(sent_frames) == 1:
-                        last_frame_resend_counter += 1
-                    if last_frame_resend_counter == transm_global_params.MAX_LAST_PACKET_SENDING:
-                        print("sender: Last frame re-sending limit is reached, terminating", get_time_h_m_s())
-                        break
+                        self.total_sent_ += 1
 
                     time_since_last_ack = time.time()
 
+            # if is_waiting_last_ack and len(sent_frames) == 1:
+            #     if time.time() - last_frame_timeout_start > transm_global_params.TIMEOUT_LAST_PACKET_SENDER:
+            #         if self.VERBOSE:
+            #             print("sender: Last frame re-sending limit is reached, terminating", get_time_h_m_s())
+            #         break
+
 
 if __name__ == "__main__":
-    frames_count = 10
+    frames_count = 100
 
     m = IPCManager(('localhost', 5000))
     m.start()
@@ -182,13 +227,34 @@ if __name__ == "__main__":
     with open('input.txt', 'r') as file:
         data = file.read()
 
-    sender = Sender(m, transm_global_params.TRANSMISSION_PROTOCOL_TYPE)
+    sender = Sender(m, transm_global_params.TRANSMISSION_PROTOCOL_TYPE, True)
 
     sender.wait_for_connection()
 
+    start_time = datetime.datetime.now()
+
     sender.send(list(split_string(data, frames_count)))
 
-    print("sender: Wait a little", get_time_h_m_s())
-    time.sleep(6)
+    finish_time = datetime.datetime.now()
+
+    # with open('sender_results.txt', 'a') as file:
+    #     file.write(
+    #         str(transm_global_params.TRANSMISSION_PROTOCOL_TYPE)
+    #         + " "
+    #         + str(transm_global_params.ERROR_PROBABILITY)
+    #         + " "
+    #         + str(get_delta_ms(start_time, finish_time))
+    #         + " ms"
+    #         + " total_sent: "
+    #         + str(sender.total_sent_)
+    #         + " total_received_ack: "
+    #         + str(sender.total_received_ack_)
+    #         + " win size: "
+    #         + str(transm_global_params.WINDOW_SIZE)
+    #         + "\n"
+    #     )
+
+    print("sender: Wait before shutdown connection", get_time_h_m_s())
+    time.sleep(2)
 
     m.shutdown()
