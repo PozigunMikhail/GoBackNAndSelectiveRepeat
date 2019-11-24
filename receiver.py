@@ -1,5 +1,6 @@
 import datetime
 import time
+import sys
 
 from ipc_manager import IPCManager
 from frame import Frame
@@ -278,7 +279,11 @@ if __name__ == "__main__":
     for s in data:
         out_str += s
 
-    with open('output.txt', 'w') as file:
+    output_path = "output.txt"
+    if len(sys.argv) > 1:
+        output_path = sys.argv[1]
+
+    with open(output_path, 'w') as file:
         file.write(out_str)
 
     # with open('input.txt', 'r') as file:

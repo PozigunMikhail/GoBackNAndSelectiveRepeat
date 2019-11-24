@@ -1,5 +1,7 @@
 import time
 import datetime
+import sys
+
 from ipc_manager import IPCManager
 from frame import Frame
 from utils import split_string
@@ -224,7 +226,11 @@ if __name__ == "__main__":
     m.start()
     # m.connect()
 
-    with open('input.txt', 'r') as file:
+    input_path = "input.txt"
+    if len(sys.argv) > 1:
+        input_path = sys.argv[1]
+
+    with open(input_path, 'r') as file:
         data = file.read()
 
     sender = Sender(m, transm_global_params.TRANSMISSION_PROTOCOL_TYPE, True)
