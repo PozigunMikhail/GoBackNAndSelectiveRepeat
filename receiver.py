@@ -28,7 +28,8 @@ class Receiver:
         self.total_sent_ack_ = 0
 
     def wait_for_connection(self):
-        while True:
+        time_start = time.time()
+        while time.time() - time_start < transm_global_params.CONNECTION_TIMEOUT:
             req = self.ipc_manager_.get_from_sender()
             if req is None:
                 continue
@@ -37,7 +38,8 @@ class Receiver:
                 self.ipc_manager_.send_to_sender(ack)
                 if self.VERBOSE:
                     print("receiver: Connection established", get_time_h_m_s())
-                break
+                return True
+        return False
 
     def receive(self):
         if self.transmission_protocol_ == TransmissionProtocol.ALGORITHM_TYPE_GBN:
@@ -55,7 +57,11 @@ class Receiver:
         if self.VERBOSE:
             print("receiver: Start transmission", get_time_h_m_s())
 
+        start_transmission_time = time.time()
+
         while True:
+            if time.time() - start_transmission_time > transm_global_params.TRANSMISSION_TIMEOUT:
+                return None
             frame = self.ipc_manager_.get_from_sender()
 
             if is_last_frame:  # resend ack for each new frame after the last frame until timeout
@@ -196,7 +202,10 @@ class Receiver:
         if self.VERBOSE:
             print("receiver: Start transmission", get_time_h_m_s())
 
+        start_transmission_time = time.time()
         while True:
+            if time.time() - start_transmission_time > transm_global_params.TRANSMISSION_TIMEOUT:
+                return None
             frame = self.ipc_manager_.get_from_sender()
 
             if is_last_frame:  # resend ack for each new frame after the last frame until timeout

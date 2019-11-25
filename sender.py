@@ -28,8 +28,9 @@ class Sender:
         self.total_received_ack_ = 0
 
     def wait_for_connection(self):
+        time_start = time.time()
         time_since_last_try = time.time()
-        while True:
+        while time.time() - time_start < transm_global_params.CONNECTION_TIMEOUT:
 
             if time.time() - time_since_last_try > transm_global_params.CONNECTION_ESTABLISHMENT_INTERVAL:
                 if self.VERBOSE:
@@ -44,13 +45,14 @@ class Sender:
             if ack.seq_num_ == transm_global_params.ESTABLISH_CONNECTION_CODE:
                 if self.VERBOSE:
                     print("sender: Connection established", get_time_h_m_s())
-                break
+                return True
+        return False
 
     def send(self, data_list):
         if self.transmission_protocol_ == TransmissionProtocol.ALGORITHM_TYPE_GBN:
-            self.send_go_back_n(data_list)
+            return self.send_go_back_n(data_list)
         elif self.transmission_protocol_ == TransmissionProtocol.ALGORITHM_TYPE_SR:
-            self.send_sel_repeat(data_list)
+            return self.send_sel_repeat(data_list)
 
     def send_sel_repeat(self, data_list):
         seq_num_first = 0
@@ -67,7 +69,10 @@ class Sender:
         if self.VERBOSE:
             print("sender: Start transmission", get_time_h_m_s())
 
+        start_transmission_time = time.time()
         while True:
+            if time.time() - start_transmission_time > transm_global_params.TRANSMISSION_TIMEOUT:
+                return False
             if seq_num_last < seq_num_first + transm_global_params.WINDOW_SIZE and not is_waiting_last_ack:
                 frame = Frame(
                     data=data_list[cur_data_block_idx],
@@ -117,7 +122,7 @@ class Sender:
                 if is_waiting_last_ack and len(sent_frames) == 0:
                     if self.VERBOSE:
                         print("sender: Received last ack, terminate transmission", get_time_h_m_s())
-                    break
+                    return True
 
             if ack is not None and ack.is_corrupted_:
                 if self.VERBOSE:
@@ -159,7 +164,10 @@ class Sender:
         if self.VERBOSE:
             print("sender: Start transmission", get_time_h_m_s())
 
+        start_transmission_time = time.time()
         while True:
+            if time.time() - start_transmission_time > transm_global_params.TRANSMISSION_TIMEOUT:
+                return False
             if seq_num_last < seq_num_first + transm_global_params.WINDOW_SIZE and not is_waiting_last_ack:
                 frame = Frame(
                     data=data_list[cur_data_block_idx],
@@ -197,7 +205,7 @@ class Sender:
                     if is_waiting_last_ack and len(sent_frames) == 0:
                         if self.VERBOSE:
                             print("sender: Received last ack, terminate transmission", get_time_h_m_s())
-                        break
+                        return True
             else:
                 if ack is not None and ack.is_corrupted_:
                     if self.VERBOSE:
