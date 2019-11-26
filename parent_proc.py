@@ -163,15 +163,18 @@ if __name__ == '__main__':
 
     print("Network launch", get_time_h_m_s())
 
-    # for i in range(len(processes)):
-    for i in range(len(processes) - 1):
+    for i in range(len(processes)):
         processes[i].start()
 
-    time.sleep(12)
-    processes[-1].start()
+    # processes[0].start()
+    # for i in range(2, len(processes) - 1):
+    #     processes[i].start()
+    # time.sleep(12)
+    # processes[1].start()
+    # processes[-1].start()
 
     time_begin = time.time()
-    while time.time() - time_begin < 90:
+    while time.time() - time_begin < transm_global_params.NETWORK_TIMEOUT:
         pass
 
     print("Network timeout, exiting", get_time_h_m_s())
